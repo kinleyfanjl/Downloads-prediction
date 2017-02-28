@@ -1,0 +1,148 @@
+install.packages('rjson')
+library("rjson")
+library("stringr")
+###Applist###
+applist = fromJSON(file = "http://test.ajin.me/data/applist", 
+                   method = "C", unexpected.escape = "error" )
+applist = unique(applist)
+
+app = c("http://test.ajin.me/data/getAppData?k=")
+
+###循环获取###
+
+###apply获取###
+getJSON<-function(x){
+  k<-paste0("http://test.ajin.me/data/getAppData?k=",x)
+  
+  return(fromJSON(file = k, method = "C", unexpected.escape = 'error'))
+}
+
+data<-sapply(applist,getJSON)
+#########################################################
+###############clean keywords############################
+#########################################################
+
+
+###clean null list###
+data1=data
+
+del=c()
+for(i in 1:ncol(data)){
+  if(length(data[2,i][[1]])<1){
+    del<-c(del,i)
+  }
+}
+###No operations on data###
+
+data1= data[,-del]
+#####get all the priority######
+pri_all<-function(x,rank=10){
+  l<-x[[1]];pr<-c()
+  for(i in 1:length(l)){
+      pr<-c(pr,as.numeric(l[[i]]$priority))
+    }
+  return(pr)
+}
+
+priall=c()
+for(i in 1:ncol(data1)){
+  priall=c(priall,pri_all(data1[2,i]))
+}
+plot(density(log(priall)))
+######delete priority 0 items for apply-version#######
+pridel <- function(x,y=0 ){
+  l = x; del=c() ;r = y
+  for(i in 1:length(l)){
+    if(l[[i]]$priority>r){
+      del=c(del,i)
+    }
+  }
+  return(list(l[del]))
+}
+data2=data1
+data2[2,]=sapply(data1[2,],pridel)
+####clean null list######
+del=c()
+for(i in 1:ncol(data2)){
+  if(length(data2[2,i][[1]])<1){
+    del<-c(del,i)
+  }
+}
+data2= data2[,-del]
+###########################################
+#####get weighted mean of all the ranks####
+###########################################
+pri_wei<-function(x,maxrank=50){
+  l=x;del<-c();pr<-c();r=maxrank;w=c()
+  wei <- function(x,w=r){
+      return(1-x^2/w^2)  
+   }
+   for(i in 1:length(l)){
+    w<-c(w,wei(l[[i]]$rank))
+    pr<-c(pr,as.numeric(l[[i]]$priority))
+    }
+  return(sum(pr*w)/(sum(w)))
+}
+wmeanpri<-c()
+for(j in 1:ncol(data2)){
+  wmeanpri[j]<-pri_wei(data[2,j])
+}
+wmeanpri=sapply(data2[2,],pri_wei)
+data2[2,]=wmeanpri
+
+
+###get the dataframe###
+finaldat<-as.data.frame(matrix(rep(1,22),1,22))
+for(i in 1:ncol(data2)){
+  k<-unlist(data2[,i])
+  finaldat<-rbind(finaldat,k)
+}
+finaldat<-finaldat[-1,]
+names<-c('download','keycount','time','04','05','06','07','08','09','10','11','12','13','14','15','16',
+         '17','18','20','id1','id2','wmeanpri')
+colnames(finaldat) <- names  
+View(finaldat)
+#################################################
+##############clean downloads == 0###############
+#################################################
+datdel0 <- function(x,days=4){
+  del<-c()
+  for(i in 1:nrow(x)){
+  if(length(which(x[i,]==0))>days){
+  del<-c(del,i) }}
+  return(x[-del,])
+}
+
+finaldat1=datdel0(finaldat)
+finaldat1<-as.data.frame(apply(finaldat1,2,as.numeric))
+finaldat1[,20]=as.numeric(finaldat1[,20]==6014)
+
+
+###clean large coefficients of variation###
+dif1<-t(abs(apply(finaldat1[4:19],1,diff)))
+de<-apply(finaldat1[4:19],1,function(x) {sd(x)/mean(x)})
+del<-c(which(de>2))  #or 1.5 may be similar 
+
+finaldat1<-finaldat1[-del,]
+rownames(finaldat1)<-1:nrow(finaldat1)
+#del outliers by human interference(or can do one lm then get'em by diagnostic plots)
+finaldat1<-finaldat1[-2,]
+finaldat1<-finaldat1[-c(32,53,470),]
+#del 0 downloads for log transformation###
+finaldat2=finaldat1
+finaldat2<-finaldat2[-which(finaldat1[,1]==0),]
+
+
+fit <- lm(log(download)~factor(id1)+wmeanpri-1,data=finaldat2)
+summary(fit)
+###################################################################
+###########进行对数变换之后，并且在删掉多数数据之后拟合效果不错，但是对于少部分的千级下载应用不适用，可以选择
+###########时间序列来预测其基本格局，然后再加上当日关键词的输入来作为精确预测
+
+ll<-exp(predict(fit,finaldat2))
+
+
+finaldat1 <- finaldat1[-which(is.na(finaldat1$wmeanpri)),]
+write.csv(finaldat1,'Downloads.csv')
+
+
